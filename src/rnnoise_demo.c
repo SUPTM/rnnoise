@@ -1,28 +1,3 @@
-/* Copyright (c) 2017 Mozilla */
-/*
-   Redistribution and use in source and binary forms, with or without
-   modification, are permitted provided that the following conditions
-   are met:
-
-   - Redistributions of source code must retain the above copyright
-   notice, this list of conditions and the following disclaimer.
-
-   - Redistributions in binary form must reproduce the above copyright
-   notice, this list of conditions and the following disclaimer in the
-   documentation and/or other materials provided with the distribution.
-
-   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-   ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-   A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE FOUNDATION OR
-   CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-   EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-   PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-   PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
-   LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
-   NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-   SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
 
 #include <stdio.h>
 #include "rnnoise.h"
@@ -32,6 +7,69 @@
 #define DR_WAV_IMPLEMENTATION
 
 #include "dr_wav.h"
+
+#if   defined(__APPLE__)
+# include <mach/mach_time.h>
+#elif defined(_WIN32)
+# define WIN32_LEAN_AND_MEAN
+
+# include <windows.h>
+
+#else // __linux
+
+# include <time.h>
+
+# ifndef  CLOCK_MONOTONIC //_RAW
+#  define CLOCK_MONOTONIC CLOCK_REALTIME
+# endif
+#endif
+
+static
+uint64_t nanotimer() {
+    static int ever = 0;
+#if defined(__APPLE__)
+    static mach_timebase_info_data_t frequency;
+    if (!ever) {
+        if (mach_timebase_info(&frequency) != KERN_SUCCESS) {
+            return 0;
+        }
+        ever = 1;
+    }
+    return  (mach_absolute_time() * frequency.numer / frequency.denom);
+#elif defined(_WIN32)
+    static LARGE_INTEGER frequency;
+    if (!ever) {
+        QueryPerformanceFrequency(&frequency);
+        ever = 1;
+    }
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    return (t.QuadPart * (uint64_t) 1e9) / frequency.QuadPart;
+#else // __linux
+    struct timespec t = {0};
+    if (!ever) {
+        if (clock_gettime(CLOCK_MONOTONIC, &t) != 0) {
+            return 0;
+        }
+        ever = 1;
+    }
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (t.tv_sec * (uint64_t) 1e9) + t.tv_nsec;
+#endif
+}
+
+static double now() {
+    static uint64_t epoch = 0;
+    if (!epoch) {
+        epoch = nanotimer();
+    }
+    return (nanotimer() - epoch) / 1e9;
+};
+
+static double calcElapsed(double start, double end) {
+    double took = -start;
+    return took + end;
+}
 
 
 void wavWrite_int16(char *filename, int16_t *buffer, int sampleRate, uint32_t totalSampleCount) {
@@ -125,19 +163,19 @@ void resampleData(const int16_t *sourceData, int32_t sampleRate, uint32_t srcSiz
 }
 
 void denoise_proc(int16_t *buffer, uint32_t buffen_len) {
-    const int frame_size = 480;
+	#define  FRAME_SIZE   480 
     DenoiseState *st;
     st = rnnoise_create();
-    int16_t patch_buffer[frame_size];
+    int16_t patch_buffer[FRAME_SIZE];
     if (st != NULL) {
-        uint32_t frames = buffen_len / frame_size;
-        uint32_t lastFrame = buffen_len % frame_size;
+        uint32_t frames = buffen_len / FRAME_SIZE;
+        uint32_t lastFrame = buffen_len % FRAME_SIZE;
         for (int i = 0; i < frames; ++i) {
             rnnoise_process_frame(st, buffer, buffer);
-            buffer += frame_size;
+            buffer += FRAME_SIZE;
         }
         if (lastFrame != 0) {
-            memset(patch_buffer, 0, frame_size * sizeof(int16_t));
+            memset(patch_buffer, 0, FRAME_SIZE * sizeof(int16_t));
             memcpy(patch_buffer, buffer, lastFrame * sizeof(int16_t));
             rnnoise_process_frame(st, patch_buffer, patch_buffer);
             memcpy(buffer, patch_buffer, lastFrame * sizeof(int16_t));
@@ -155,7 +193,10 @@ void rnnDeNoise(char *in_file, char *out_file) {
     int16_t *data_out = (int16_t *) malloc(out_size * sizeof(int16_t));
     if (data_in != NULL && data_out != NULL) {
         resampleData(data_in, in_sampleRate, (uint32_t) in_size, data_out, out_sampleRate);
+        double startTime = now();
         denoise_proc(data_out, out_size);
+        double time_interval = calcElapsed(startTime, now());
+        printf("time interval: %d ms\n ", (int) (time_interval * 1000));
         resampleData(data_out, out_sampleRate, (uint32_t) out_size, data_in, in_sampleRate);
         wavWrite_int16(out_file, data_in, in_sampleRate, (uint32_t) in_size);
         free(data_in);

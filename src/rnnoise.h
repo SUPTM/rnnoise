@@ -23,7 +23,6 @@
    NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
-
 #ifndef RNNOISE_EXPORT
 # if defined(WIN32)
 #  if defined(RNNOISE_BUILD) && defined(DLL_EXPORT)
@@ -41,7 +40,7 @@
 
 typedef struct DenoiseState DenoiseState;
 
-RNNOISE_EXPORT size_t rnnoise_get_size();
+RNNOISE_EXPORT int rnnoise_get_size();
 
 RNNOISE_EXPORT int rnnoise_init(DenoiseState *st);
 
