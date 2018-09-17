@@ -145,25 +145,43 @@ void splitpath(const char *path, char *drv, char *dir, char *name, char *ext) {
     }
 }
 
-void resampleData(const int16_t *sourceData, int32_t sampleRate, uint32_t srcSize, int16_t *destinationData,
-                  int32_t newSampleRate) {
-    if (sampleRate == newSampleRate) {
-        memcpy(destinationData, sourceData, srcSize * sizeof(int16_t));
-        return;
+//ref :https://github.com/cpuimage/resampler
+//poly s16 version
+void poly_resample_s16(const int16_t *input, int16_t *output, int in_frames, int out_frames, int channels) {
+    float scale = (float) (1.0 * in_frames) / out_frames;
+    int head = (int) (1.0f / scale);
+    float pos = 0;
+    for (int i = 0; i < head; i++) {
+        for (int c = 0; c < channels; c++) {
+            int sample_1 = input[0 + c];
+            int sample_2 = input[channels + c];
+            int sample_3 = input[(channels << 1) + c];
+            int poly_3 = sample_1 + sample_3 - (sample_2 << 1);
+            int poly_2 = (sample_2 << 2) + sample_1 - (sample_1 << 2) - sample_3;
+            int poly_1 = sample_1;
+            output[i * channels + c] = (int16_t) ((poly_3 * pos * pos + poly_2 * pos) * 0.5f + poly_1);
+        }
+        pos += scale;
     }
-    uint32_t last_pos = srcSize - 1;
-    uint32_t dstSize = (uint32_t) (srcSize * ((float) newSampleRate / sampleRate));
-    for (uint32_t idx = 0; idx < dstSize; idx++) {
-        float index = ((float) idx * sampleRate) / (newSampleRate);
-        uint32_t p1 = (uint32_t) index;
-        float coef = index - p1;
-        uint32_t p2 = (p1 == last_pos) ? last_pos : p1 + 1;
-        destinationData[idx] = (int16_t) ((1.0f - coef) * sourceData[p1] + coef * sourceData[p2]);
+    float in_pos = head * scale;
+    for (int n = head; n < out_frames; n++) {
+        int npos = (int) in_pos;
+        pos = in_pos - npos + 1;
+        for (int c = 0; c < channels; c++) {
+            int sample_1 = input[(npos - 1) * channels + c];
+            int sample_2 = input[(npos + 0) * channels + c];
+            int sample_3 = input[(npos + 1) * channels + c];
+            int poly_3 = sample_1 + sample_3 - (sample_2 << 1);
+            int poly_2 = (sample_2 << 2) + sample_1 - (sample_1 << 2) - sample_3;
+            int poly_1 = sample_1;
+            output[n * channels + c] = (int16_t) ((poly_3 * pos * pos + poly_2 * pos) * 0.5f + poly_1);
+        }
+        in_pos += scale;
     }
 }
 
 void denoise_proc(int16_t *buffer, uint32_t buffen_len) {
-	#define  FRAME_SIZE   480 
+#define  FRAME_SIZE   480
     DenoiseState *st;
     st = rnnoise_create();
     int16_t patch_buffer[FRAME_SIZE];
@@ -191,13 +209,14 @@ void rnnDeNoise(char *in_file, char *out_file) {
     uint32_t out_sampleRate = 48000;
     uint32_t out_size = (uint32_t) (in_size * ((float) out_sampleRate / in_sampleRate));
     int16_t *data_out = (int16_t *) malloc(out_size * sizeof(int16_t));
+    int channels = 1;
     if (data_in != NULL && data_out != NULL) {
-        resampleData(data_in, in_sampleRate, (uint32_t) in_size, data_out, out_sampleRate);
+        poly_resample_s16(data_in, data_out, in_size, out_size, channels);
         double startTime = now();
         denoise_proc(data_out, out_size);
         double time_interval = calcElapsed(startTime, now());
         printf("time interval: %d ms\n ", (int) (time_interval * 1000));
-        resampleData(data_out, out_sampleRate, (uint32_t) out_size, data_in, in_sampleRate);
+        poly_resample_s16(data_out, data_in, out_size, in_size, channels);
         wavWrite_int16(out_file, data_in, in_sampleRate, (uint32_t) in_size);
         free(data_in);
         free(data_out);
