@@ -1,4 +1,4 @@
-RNNoise is a noise suppression library based on a recurrent neural network
+# RNNoise is a noise suppression library based on a recurrent neural network
  - ref: https://github.com/xiph/rnnoise
 
 To compile, just use CMake.
